@@ -1,43 +1,46 @@
 from pymongo import MongoClient
 from django.utils import timezone
+from bson.objectid import ObjectId
 
-client = MongoClient('mongodb+srv://IS081:msr123@cluster0.dl94m.mongodb.net/test', maxPoolSize=50, wTimeoutMS=2500)
-db = client['DineinDB']
-food_collection=db['FoodMenu']
-user_collection=db['Users']
-table_collection=db['Table']
-
-# def insertFoodOps():
-#     insert_result = food_collection.insert_one({"name": "Barbequeue Chicken", "type": "non-veg", "category": "Main Course", "price": 150, "description": "Chicken marinated in a spicy blend of spices, served with a side of salad and rice.", "image": "https://images.pexels.com/photos/461198/pexels-photo-461198.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=750&w=1260"})
+client = MongoClient('CONNECTION_LINK',maxPoolSize=50, wTimeoutMS=2500) #atlas connection
+db = client['YOUR_DATABASE_NAME']
+food_collection=db['DATABASENAME_foodmenu']
+user_collection=db['DATABASENAME_user']
+table_collection=db['DATABASENAME_table']
+bill_collection=db['DATABASENAME_bill']
 
 def insertUser(name, email, table_id, otp):
     try:
-        insert_result = user_collection.insert_one({"name": name, "email":email, "tableNo":table_id, "otp":otp, "otp_verified":False, "orders":[]})
+        print(name, email, table_id, otp)
+        table = table_collection.find_one({"number":table_id})
+        if table["status"]=="available":
+            print("Table is available")
+            virt_id=generate_virt_id(user_collection)
+            print(virt_id, "virt_id") 
+            insert_result = user_collection.insert_one({"id" : virt_id, "name": name, "email":email, "tableNo":table_id, "otp":otp, "otp_verified":False})
+            return insert_result
+        else: 
+            return False
     except Exception as e:
         print(e)
-
-def insertTable(table_no):
-    insert_result = table_collection.insert_one({"number": table_no, "status": "occupied", "capacity": "5", "order":None, "totalPrice":0, "order_payment_amount":0, "order_payment_status":None, "order_payment_id":None, "order_no":None, "order_time":None, "order_date":None, "order_status":None})
-    return insert_result
-
-
+        return e
 
 def verify_otp(otp):
     try:
-        user = user_collection.find_one({"otp":int(otp)})
-        print(user)
+        user = user_collection.find_one({"otp":int(otp)})   
         if user is not None:
             try:
                 update_result = user_collection.update_one({"otp":int(otp)}, {"$set":{"otp_verified":True}}, upsert=True)
-                # print(update_result.raw_result)
+                print(update_result)
             except:
                 print("Error in updating otp_verified")
             
-            # print(user.get("name"), user.get("email"), user.get("tableNo"), user.get("otp"), user.get("otp_verified"))
             table_no=user.get("tableNo")
             try:
-                insert_result=insertTable(table_no)
-                # print(insert_result)
+                temp = user_collection.find_one({"otp":int(otp), "otp_verified":True})
+                temp.pop("_id")
+                print(temp, "temp")
+                update_result=table_collection.update_one({"number":table_no}, {"$set":{"status":"occupied", "occupied_by": temp}})
             except Exception as e:
                 return e
             return [True, user]
@@ -46,15 +49,23 @@ def verify_otp(otp):
     except Exception as e:
         return e
 
-def delete_user_table(table_no):
+def delete_unverified(email):
     try:
-        delete_table_result = table_collection.delete_one({"number":table_no})
-        delete_user_result = table_collection.delete_many({"otp_verified": False, "tableNo":table_no})
-        return [delete_table_result, delete_user_result]
+        print(email)
+        delete_user_result = user_collection.delete_many({"otp_verified": False, "email":email})
+        return delete_user_result
     except Exception as e:
         print(e)
         return e
 
+def delete_user_table(table_no, user):
+    try:
+        update_result=table_collection.update_one({"number":table_no}, {"$set":{"status":"available", "occupied_by":None}})
+        delete_user_result = user_collection.delete_many({"tableNo":table_no, "email":user["email"]})
+        return [update_result, delete_user_result]
+    except Exception as e:
+        print(e)
+        return e
 
 def get_food_menu():
     try:
@@ -75,9 +86,7 @@ def get_food_menu():
             "pizza": list(pizza),
             "burger": list(burger),
         }
-        # print(food_menu["deserts"])
         return food_menu
-        # return [starters, main_course, deserts, drinks, combo, pizza, burger]
     except Exception as e:
         return e
 
@@ -86,12 +95,37 @@ def get_user(table_no):
         user = user_collection.find_one({"tableNo":table_no})
         return user
     except Exception as e:
-        return e
+        return e 
 
-
-def users_get_updated( id):
+def get_food(id):
     try:
-        user = user_collection.find_one({"_id":id})
-        return user
+        food_item = food_collection.find_one({"_id": ObjectId(id)})
+        return food_item
     except Exception as e:
         return e
+
+def generate_bill(orders):
+    total=0
+    for order in orders:
+        total += int(order[1])*order[0]["price"]
+    tax=0.1*total
+    final_amt=total+tax
+    return {"total" : total, "tax" : tax, "final_amt" : final_amt}
+
+def save_bill(bill):
+    bill["status"] = "unpaid"
+    bill["time"] = timezone.now()
+    try:
+        insert_result = bill_collection.insert_one(bill)
+        return insert_result
+    except Exception as e:
+        return e
+
+def generate_virt_id(collection):
+    id=1
+    while True:
+        doc=collection.find_one({"id":id})
+        if doc is None:
+            print("id found")
+            return id
+        id+=1
